@@ -4,6 +4,7 @@ using BaconBackend.DataObjects;
 using BaconBackend.Helpers;
 using BaconBackend.Interfaces;
 using BaconBackend.Managers;
+using BaconBackend.Managers.Background;
 using Baconit.HelperControls;
 using Baconit.Interfaces;
 using Baconit.Panels;
@@ -26,6 +27,7 @@ using Windows.UI.Xaml.Controls.Primitives;
 using Windows.UI.Xaml.Data;
 using Windows.UI.Xaml.Input;
 using Windows.UI.Xaml.Media;
+using Windows.UI.Xaml.Media.Animation;
 using Windows.UI.Xaml.Navigation;
 
 // The Blank Page item template is documented at http://go.microsoft.com/fwlink/?LinkId=402352&clcid=0x409
@@ -66,6 +68,16 @@ namespace Baconit
         /// </summary>
         KeyboardShortcutHelper m_keyboardShortcutHepler;
 
+        /// <summary>
+        /// Used to tell us that we should navigate to a different subreddit than the default.
+        /// </summary>
+        string m_subredditFirstNavOverwrite;
+
+        /// <summary>
+        /// Used to tell the app to navigate to the message inbox on launch.
+        /// </summary>
+        bool m_hadDeferredInboxNavigate = false;
+
         public MainPage()
         {
             this.InitializeComponent();
@@ -74,7 +86,7 @@ namespace Baconit
             VisualStateManager.GoToState(this, "HideQuichSeachResults", false);
 
             // Set ourselves as the backend action listener
-            App.BaconMan.SetBackendActionListner(this);
+            App.BaconMan.SetBackendActionListener(this);
 
             // Set the title bar color
             ApplicationView.GetForCurrentView().TitleBar.BackgroundColor = Color.FromArgb(255, 51, 51, 51);
@@ -92,22 +104,7 @@ namespace Baconit
             // Create the panel manager
             m_panelManager = new PanelManager(this, (IPanel)panel);
             ui_contentRoot.Children.Add(m_panelManager);
-            m_panelManager.OnGoBack += PanelManager_OnGoBack;
-
-            // Add transparency to the account header, this will make it darker
-            Color accentColor = (ui_accountHeaderGrid.Background as SolidColorBrush).Color;
-            accentColor.A = 200;
-            ui_accountHeaderGrid.Background = new SolidColorBrush(accentColor);
-
-            // Add some transparency to the subreddit header also.
-            accentColor = (ui_accountHeaderGrid.Background as SolidColorBrush).Color;
-            accentColor.A = 137;
-            ui_trendingSubredditsHeader.Background = new SolidColorBrush(accentColor);
-
-            // Add some transparency to the search header also.
-            accentColor = (ui_accountHeaderGrid.Background as SolidColorBrush).Color;
-            accentColor.A = 75;
-            ui_searchHeader.Background = new SolidColorBrush(accentColor);
+            App.BaconMan.OnBackButton += BaconMan_OnBackButton;
 
             // Sub to callbacks
             App.BaconMan.SubredditMan.OnSubredditsUpdated += SubredditMan_OnSubredditUpdate;
@@ -123,6 +120,9 @@ namespace Baconit
             // Setup the keyboard shortcut helper and sub.
             m_keyboardShortcutHepler = new KeyboardShortcutHelper();
             m_keyboardShortcutHepler.OnQuickSearchActivation += KeyboardShortcutHepler_OnQuickSearchActivation;
+            m_keyboardShortcutHepler.OnGoBackActivation += KeyboardShortcutHepler_OnGoBackActivation;
+
+            m_panelManager.OnNavigationComplete += PanelManager_OnNavigationComplete;
         }
 
         /// <summary>
@@ -139,7 +139,7 @@ namespace Baconit
             // Request an update if needed
             App.BaconMan.SubredditMan.Update();
             App.BaconMan.UserMan.UpdateUser();
-
+            
             // Get the default subreddit.
             string defaultDisplayName = App.BaconMan.UiSettingsMan.SubredditList_DefaultSubredditDisplayName;
             if (String.IsNullOrWhiteSpace(defaultDisplayName))
@@ -147,10 +147,16 @@ namespace Baconit
                 defaultDisplayName = "frontpage";
             }
 
+            // Make sure we don't have an overwrite (launched from a secondary tile)
+            if(!String.IsNullOrWhiteSpace(m_subredditFirstNavOverwrite))
+            {
+                defaultDisplayName = m_subredditFirstNavOverwrite;
+            }
+
             // Navigate to the start
             Dictionary<string, object> args = new Dictionary<string, object>();
             args.Add(PanelManager.NAV_ARGS_SUBREDDIT_NAME, defaultDisplayName);
-            m_panelManager.Navigate(typeof(SubredditPanel), defaultDisplayName + SortTypes.Hot, args);
+            m_panelManager.Navigate(typeof(SubredditPanel), defaultDisplayName + SortTypes.Hot + SortTimeTypes.Week, args);
             m_panelManager.Navigate(typeof(WelcomePanel), "WelcomePanel");
 
             // Update the trending subreddits
@@ -158,6 +164,61 @@ namespace Baconit
 
             // Show review if we should
             CheckShowReviewAndFeedback();
+        }
+
+        /// <summary>
+        /// Fired when the page is navigated to.
+        /// </summary>
+        /// <param name="e"></param>
+        protected override void OnNavigatedTo(NavigationEventArgs e)
+        {
+            if (e.Parameter.GetType() == typeof(string) && !String.IsNullOrWhiteSpace((string)e.Parameter))
+            {
+                string argument = (string)e.Parameter;
+                if (argument.StartsWith(TileManager.c_subredditOpenArgument))
+                {
+                    m_subredditFirstNavOverwrite = argument.Substring(TileManager.c_subredditOpenArgument.Length);
+                }
+                else if(argument.StartsWith(BackgroundMessageUpdater.c_messageInboxOpenArgument))
+                {
+                    m_hadDeferredInboxNavigate = true;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Fired whenever the panel manager is done navigating. We use this to fire the deferred inbox navigate
+        /// if we have one.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void PanelManager_OnNavigationComplete(object sender, EventArgs e)
+        {
+            if (m_hadDeferredInboxNavigate)
+            {
+                m_hadDeferredInboxNavigate = false;
+                m_panelManager.Navigate(typeof(MessageInbox), "MessageInbox");
+            }
+        }
+
+        /// <summary>
+        /// Called by the app when the page is reactivated.
+        /// </summary>
+        /// <param name="arguments"></param>
+        public void OnReActivated(string arguments)
+        {
+            if (arguments != null && arguments.StartsWith(TileManager.c_subredditOpenArgument))
+            {
+                string subredditDisplayName = arguments.Substring(TileManager.c_subredditOpenArgument.Length);
+                RedditContentContainer content = new RedditContentContainer();
+                content.Subreddit = subredditDisplayName;
+                content.Type = RedditContentType.Subreddit;
+                App.BaconMan.ShowGlobalContent(content);
+            }
+            else if(arguments != null && arguments.StartsWith(BackgroundMessageUpdater.c_messageInboxOpenArgument))
+            {
+                m_panelManager.Navigate(typeof(MessageInbox), "MessageInbox");
+            }
         }
 
         /// <summary>
@@ -221,42 +282,56 @@ namespace Baconit
         /// <param name="newSubreddits"></param>
         private void UpdateSubredditList(List<Subreddit> newSubreddits)
         {
-            int insertCount = 0;
-            for (int newListCount = 0; newListCount < newSubreddits.Count; newListCount++)
+            try
             {
-                Subreddit newSubreddit = newSubreddits[newListCount];
+                int insertCount = 0;
+                for (int newListCount = 0; newListCount < newSubreddits.Count; newListCount++)
+                {
+                    Subreddit newSubreddit = newSubreddits[newListCount];
 
-                // Set some UI properties.
-                newSubreddit.FavIconUri = newSubreddit.IsFavorite ? "ms-appx:///Assets/MainPage/FavoriteIcon.png" : "ms-appx:///Assets/MainPage/NotFavoriteIcon.png";
-                newSubreddit.DisplayName = newSubreddit.DisplayName.ToLower();
+                    // Set some UI properties.
+                    newSubreddit.FavIconUri = newSubreddit.IsFavorite ? "ms-appx:///Assets/MainPage/FavoriteIcon.png" : "ms-appx:///Assets/MainPage/NotFavoriteIcon.png";
+                    newSubreddit.DisplayName = newSubreddit.DisplayName.ToLower();
 
-                // If the two are the same, just update them.
-                if (m_subreddits.Count > insertCount && m_subreddits[insertCount].Id.Equals(newSubreddit.Id))
-                {
-                    // If they are the same just update it
-                    m_subreddits[insertCount] = newSubreddit;
+                    // If the two are the same, just update them.
+                    if (m_subreddits.Count > insertCount && m_subreddits[insertCount].Id.Equals(newSubreddit.Id))
+                    {
+                        // If they are the same just update it
+                        m_subreddits[insertCount] = newSubreddit;
+                    }
+                    // (subreddit insert) If the next element in the new list is the same as the current element in the old list, insert.
+                    else if (m_subreddits.Count > insertCount && newSubreddits.Count > newListCount + 1 && newSubreddits[newListCount + 1].Id.Equals(m_subreddits[insertCount].Id))
+                    {
+                        m_subreddits.Insert(insertCount, newSubreddit);
+                    }
+                    // (subreddit remove) If the current element in the new list is the same as the next element in the old list.
+                    else if (m_subreddits.Count > insertCount + 1 && newSubreddits.Count > newListCount && newSubreddits[newListCount].Id.Equals(m_subreddits[insertCount + 1].Id))
+                    {
+                        m_subreddits.RemoveAt(insertCount);
+                    }
+                    // If the old list is still larger than the new list, replace
+                    else if (m_subreddits.Count > insertCount)
+                    {
+                        m_subreddits[insertCount] = newSubreddit;
+                    }
+                    // Or just add.
+                    else
+                    {
+                        m_subreddits.Add(newSubreddit);
+                    }
+                    insertCount++;
                 }
-                // (subreddit insert) If the next element in the new list is the same as the current element in the old list, insert.
-                else if(m_subreddits.Count > insertCount && newSubreddits.Count > newListCount + 1 && newSubreddits[newListCount + 1].Id.Equals(m_subreddits[insertCount].Id))
+
+                // Remove any extra subreddits
+                while(m_subreddits.Count > newSubreddits.Count)
                 {
-                    m_subreddits.Insert(insertCount, newSubreddit);
+                    m_subreddits.RemoveAt(m_subreddits.Count - 1);
                 }
-                // (subreddit remove) If the current element in the new list is the same as the next element in the old list.
-                else if (m_subreddits.Count > insertCount + 1 && newSubreddits.Count > newListCount && newSubreddits[newListCount].Id.Equals(m_subreddits[insertCount + 1].Id))
-                {
-                    m_subreddits.RemoveAt(insertCount);
-                }
-                // If the old list is still larger than the new list, replace
-                else if(m_subreddits.Count > insertCount)
-                {
-                    m_subreddits[insertCount] = newSubreddit;
-                }
-                // Or just add.
-                else
-                {
-                    m_subreddits.Add(newSubreddit);
-                }
-                insertCount++;
+            }
+            catch(Exception e)
+            {
+                App.BaconMan.TelemetryMan.ReportUnExpectedEvent(this, "UpdateSubredditListFailed", e);
+                App.BaconMan.MessageMan.DebugDia("UpdateSubredditListFailed", e);
             }
         }
 
@@ -368,6 +443,12 @@ namespace Baconit
 
         public void CloseTrendingSubredditsPanelIfOpen()
         {
+            // Stop the animation if it is playing
+            if (ui_storySubredditsPanel.GetCurrentState() == ClockState.Active)
+            {
+                ui_storySubredditsPanel.Stop();
+            }
+
             if (ui_trendingSubredditsPanel.MaxHeight != 0)
             {
                 ToggleTrendingSubredditsPanel();
@@ -376,7 +457,13 @@ namespace Baconit
 
         private void CloseAccoutPanelIfOpen()
         {
-            if(ui_accountGrid.MaxHeight != 0)
+            // Stop the animation if it is playing
+            if (ui_storyAccountGrid.GetCurrentState() == ClockState.Active)
+            {
+                ui_storyAccountGrid.Stop();
+            }
+
+            if (ui_accountGrid.MaxHeight != 0)
             {
                 ToggleAccountPanel();
             }
@@ -565,9 +652,9 @@ namespace Baconit
 
             // If we don't have a query hide the box
             if (String.IsNullOrWhiteSpace(query))
-            {            
+            {
                 VisualStateManager.GoToState(this, "HideQuichSeachResults", true);
-                return;                
+                return;
             }
 
             // Get the subreddits
@@ -700,8 +787,8 @@ namespace Baconit
         {
             Dictionary<string, object> args = new Dictionary<string, object>();
             args.Add(PanelManager.NAV_ARGS_SUBREDDIT_NAME, subreddit.DisplayName.ToLower());
-            m_panelManager.Navigate(typeof(SubredditPanel), subreddit.GetNavigationUniqueId(SortTypes.Hot), args);
-        }    
+            m_panelManager.Navigate(typeof(SubredditPanel), subreddit.GetNavigationUniqueId(SortTypes.Hot, SortTimeTypes.Week), args);
+        }
 
         #endregion
 
@@ -804,14 +891,19 @@ namespace Baconit
         #region IBackendActionListener
 
         /// <summary>
-        /// Fired when the user tapped go back. 
+        /// Fired when the user tapped go back.
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
-        private void PanelManager_OnGoBack(object sender, OnGoBackArgs e)
+        private void BaconMan_OnBackButton(object sender, BaconBackend.OnBackButtonArgs e)
         {
+            if(e.IsHandled)
+            {
+                return;
+            }
+
             // If the presenter is open close it and mark the back handled.
-            if(ui_globalContentPresenter.State != GlobalContentStates.Idle)
+            if (ui_globalContentPresenter.State != GlobalContentStates.Idle)
             {
                 ui_globalContentPresenter.Close();
                 e.IsHandled = true;
@@ -826,12 +918,20 @@ namespace Baconit
         {
             // Validate that the link can't be opened by the subreddit viewer
             RedditContentContainer container = MiscellaneousHelper.TryToFindRedditContentInLink(link);
-            if (container != null)
+
+            // Make sure we got a response and it isn't a website
+            if (container != null && container.Type != RedditContentType.Website)
             {
                 ShowGlobalContent(container);
             }
             else
             {
+                if(container != null && container.Type == RedditContentType.Website)
+                {
+                    // We have a link from the reddit presenter, overwrite the link
+                    link = container.Website;
+                }
+
                 ui_globalContentPresenter.ShowContent(link);
             }
         }
@@ -848,20 +948,20 @@ namespace Baconit
                 case RedditContentType.Subreddit:
                     Dictionary<string, object> args = new Dictionary<string, object>();
                     args.Add(PanelManager.NAV_ARGS_SUBREDDIT_NAME, container.Subreddit);
-                    m_panelManager.Navigate(typeof(SubredditPanel), container.Subreddit + SortTypes.Hot, args);
+                    m_panelManager.Navigate(typeof(SubredditPanel), container.Subreddit + SortTypes.Hot + SortTimeTypes.Week, args);
                     break;
                 case RedditContentType.Post:
                     Dictionary<string, object> postArgs = new Dictionary<string, object>();
                     postArgs.Add(PanelManager.NAV_ARGS_SUBREDDIT_NAME, container.Subreddit);
                     postArgs.Add(PanelManager.NAV_ARGS_FORCE_POST_ID, container.Post);
-                    m_panelManager.Navigate(typeof(FlipViewPanel), container.Subreddit + SortTypes.Hot + container.Post, postArgs);
+                    m_panelManager.Navigate(typeof(FlipViewPanel), container.Subreddit + SortTypes.Hot + SortTimeTypes.Week + container.Post, postArgs);
                     break;
                 case RedditContentType.Comment:
                     Dictionary<string, object> commentArgs = new Dictionary<string, object>();
                     commentArgs.Add(PanelManager.NAV_ARGS_SUBREDDIT_NAME, container.Subreddit);
                     commentArgs.Add(PanelManager.NAV_ARGS_FORCE_POST_ID, container.Post);
                     commentArgs.Add(PanelManager.NAV_ARGS_FORCE_COMMENT_ID, container.Comment);
-                    m_panelManager.Navigate(typeof(FlipViewPanel), container.Subreddit + SortTypes.Hot + container.Post + container.Comment, commentArgs);
+                    m_panelManager.Navigate(typeof(FlipViewPanel), container.Subreddit + SortTypes.Hot + SortTimeTypes.Week + container.Post + container.Comment, commentArgs);
                     break;
             }
         }
@@ -912,6 +1012,39 @@ namespace Baconit
         {
             // Navigate
             m_panelManager.Navigate(typeof(LoginPanel), "LoginPanel");
+        }
+
+        /// <summary>
+        /// Called by the action listener when we should nav back
+        /// </summary>
+        public bool NavigateBack()
+        {
+            return m_panelManager.GoBack();
+        }
+
+        /// <summary>
+        /// Reports a new value for the memory usage of the app.
+        /// </summary>
+        /// <param name="currentUsage"></param>
+        /// <param name="maxLimit"></param>
+        public async void ReportMemoryUsage(ulong currentUsage, ulong maxLimit)
+        {
+            // Jump to the UI thread.
+            await Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            {
+                // Show the UI if we haven't
+                ui_memoryContainer.Visibility = Visibility.Visible;
+
+                // Set the text
+                ui_memoryAppUsage.Text = String.Format("{0:N0}", currentUsage / 1024 / 1024);
+                ui_memoryAppLimit.Text = String.Format("{0:N0}", maxLimit / 1024 / 1024);
+                double percent = ((double)currentUsage / (double)maxLimit);
+                ui_memoryAppPercentage.Text = String.Format("{0:N2}%", percent * 100);
+
+                // Set the usage height.
+                double currentBar = ui_memoryBarBackground.ActualHeight * percent;
+                ui_memoryBarOverlay.Height = currentBar;
+            });
         }
 
         #endregion
@@ -973,5 +1106,31 @@ namespace Baconit
         }
 
         #endregion
+
+        /// <summary>
+        /// Fired when the splitview panel is resized.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void SplitView_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            // Important! The open panel size becomes the min width of the entire split view!
+            // Since there is no max panel size we must do it ourselves. Set the max to be 320, but if the
+            // view is smaller make it smaller. Note we have to have the -10 on the size or it will prevent
+            // resizing when we hit the actualwidth.
+            double panelSize = ui_splitView.ActualWidth - 10 < 320 ? ui_splitView.ActualWidth - 10 : 320;
+            ui_splitView.OpenPaneLength = panelSize;
+        }
+
+        /// <summary>
+        /// Fired when the keyboard shortcut for go back is fired (escape)
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void KeyboardShortcutHepler_OnGoBackActivation(object sender, EventArgs e)
+        {
+            bool isHandled = false;
+            App.BaconMan.OnBackButton_Fired(ref isHandled);
+        }
     }
 }

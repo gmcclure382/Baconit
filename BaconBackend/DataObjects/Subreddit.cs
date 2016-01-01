@@ -45,6 +45,18 @@ namespace BaconBackend.DataObjects
         public bool IsFavorite { get; set; }
 
         /// <summary>
+        /// The public markdown description for the subreddit.
+        /// </summary>
+        [JsonProperty(PropertyName = "description")]
+        public string Description { get; set; }
+
+        /// <summary>
+        /// The number of subs this subreddit has
+        /// </summary>
+        [JsonProperty(PropertyName = "subscribers")]
+        public int? SubscriberCount { get; set; } = null;
+        
+        /// <summary>
         /// The type of subreddit this is
         /// </summary>
         [JsonProperty(PropertyName = "subreddit_type")]
@@ -54,7 +66,7 @@ namespace BaconBackend.DataObjects
         /// Indicates this is not a real subreddit, we made it up.
         /// </summary>
         [JsonProperty(PropertyName = "isArtifical")]
-        public bool IsArtifical { get; set; } = false;
+        public bool IsArtifical { get; set; } = false;        
 
         /// <summary>
         /// Uri to the favorite icon
@@ -63,7 +75,8 @@ namespace BaconBackend.DataObjects
         public string FavIconUri { get; set; }
 
         /// <summary>
-        /// Uri to the favorite icon
+        /// The color to display the subreddit's name in.
+        /// Is only accented if the subreddit is favorited by the logged in user.
         /// </summary>
         [JsonIgnore]
         public SolidColorBrush SubTextBrush
@@ -86,9 +99,15 @@ namespace BaconBackend.DataObjects
             }
         }
 
-        public string GetNavigationUniqueId(SortTypes type)
+        /// <summary>
+        /// Generate an identifier for this subreddit with a particular sorting.
+        /// </summary>
+        /// <param name="type">The sorting this identifier should uniquely identify.</param>
+        /// <param name="sortType">How recent a post could have been posted to be included in the sorting.</param>
+        /// <returns>An ID that uniquely identifies a subreddit and a sorting.</returns>
+        public string GetNavigationUniqueId(SortTypes type, SortTimeTypes sortType)
         {
-            return DisplayName + type;
+            return DisplayName + type + sortType;
         }
     }
 }

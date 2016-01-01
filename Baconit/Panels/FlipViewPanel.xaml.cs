@@ -1,6 +1,7 @@
 ﻿using BaconBackend.Collectors;
 using BaconBackend.DataObjects;
 using BaconBackend.Helpers;
+using BaconBackend.Managers;
 using Baconit.FlipViewControls;
 using Baconit.HelperControls;
 using Baconit.Interfaces;
@@ -33,8 +34,8 @@ namespace Baconit.Panels
 {
     public sealed partial class FlipViewPanel : UserControl, IPanel
     {
-        private const int CACHE_BACK_COUNT = 0;
-        private const int CACHE_FORWARD_COUNT = 1;
+        const int c_hiddenCommentHeaderHeight = 36;
+        const int c_hiddenShowAllCommentsHeight = 36;
 
         //
         // Private Vars
@@ -51,9 +52,14 @@ namespace Baconit.Panels
         SortTypes m_currentSort;
 
         /// <summary>
+        /// The current sort time for this flip view instance
+        /// </summary>
+        SortTimeTypes m_currentSortTime;
+
+        /// <summary>
         /// The collector backing this flip view
         /// </summary>
-        SubredditCollector m_collector;
+        PostCollector m_collector;
 
         /// <summary>
         /// A reference to the main panel host.
@@ -64,6 +70,11 @@ namespace Baconit.Panels
         /// The list of posts that back the flip view
         /// </summary>
         ObservableCollection<Post> m_postsLists = new ObservableCollection<Post>();
+
+        /// <summary>
+        /// This list holds posts that we defer loaded if we have any.
+        /// </summary>
+        List<Post> m_deferredPostList = new List<Post>();
 
         /// <summary>
         /// Holds the protip pop up if one exists.
@@ -107,12 +118,21 @@ namespace Baconit.Panels
         /// </summary>
         LoadingOverlay m_loadingOverlay = null;
 
+        /// <summary>
+        /// Used to defer the first comments loading so we give the UI time to load before we start
+        /// the intense work of loading comments.
+        /// </summary>
+        bool m_isFirstPostLoad = true;
+
+        /// <summary>
+        /// Indicates if we are full screen from the flipveiw control or not.
+        /// </summary>
+        bool m_isFullScreen = false;
+
+
         public FlipViewPanel()
         {
             this.InitializeComponent();
-
-            // Set the list to the UI.
-            ui_flipView.ItemsSource = m_postsLists;
 
             // Set the comment box invisible for now. It should hide itself
             // when created but it doesn't seem to work. So for now just hide it
@@ -180,6 +200,9 @@ namespace Baconit.Panels
                 // Get the current sort
                 m_currentSort = arguments.ContainsKey(PanelManager.NAV_ARGS_SUBREDDIT_SORT) ? (SortTypes)arguments[PanelManager.NAV_ARGS_SUBREDDIT_SORT] : SortTypes.Hot;
 
+                // Get the current sort time
+                m_currentSortTime = arguments.ContainsKey(PanelManager.NAV_ARGS_SUBREDDIT_SORT_TIME) ? (SortTimeTypes)arguments[PanelManager.NAV_ARGS_SUBREDDIT_SORT_TIME] : SortTimeTypes.Week;
+
                 // Try to get the target post id
                 if (arguments.ContainsKey(PanelManager.NAV_ARGS_POST_ID))
                 {
@@ -205,7 +228,7 @@ namespace Baconit.Panels
                 }
 
                 // Get the collector and register for updates.
-                m_collector = SubredditCollector.GetCollector(m_subreddit, App.BaconMan, m_currentSort, forcePostId);
+                m_collector = PostCollector.GetCollector(m_subreddit, App.BaconMan, m_currentSort, m_currentSortTime, forcePostId);
                 m_collector.OnCollectionUpdated += Collector_OnCollectionUpdated;
 
                 // Kick off an update of the subreddits if needed.
@@ -221,7 +244,8 @@ namespace Baconit.Panels
 
         public void OnNavigatingTo()
         {
-            // Ignore for now
+            // Set the task bar color
+            m_host.SetStatusBar(Color.FromArgb(255, 25, 25, 25));
         }
 
         public void OnNavigatingFrom()
@@ -236,6 +260,9 @@ namespace Baconit.Panels
         /// <param name="arguments">The argumetns passed when navigate was called</param>
         public async void OnPanelPulledToTop(Dictionary<string, object> arguments)
         {
+            // Do this logic here.
+            OnNavigatingTo();
+
             if(!arguments.ContainsKey(PanelManager.NAV_ARGS_POST_ID))
             {
                 return;
@@ -311,17 +338,52 @@ namespace Baconit.Panels
         /// <param name="newPosts"></param>
         private async void UpdatePosts(int startingPos, List<Post> newPosts)
         {
-            await Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            await Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
             {
                 Visibility flipViewMenuVis = m_host.CurrentScreenMode() == ScreenMode.Single ? Visibility.Visible : Visibility.Collapsed;
 
+                bool deferLoadPosts = false;
                 // Grab the list lock
                 lock (m_postsLists)
                 {
-                    // Setup the insert
-                    int insertIndex = startingPos;
+                    // If we are currently in a deferred scenario then we need to handle updates
+                    // differently since the list won't match the list that is expected
+                    if(m_deferredPostList.Count != 0)
+                    {
+                        if (m_postsLists.Count > 0 && newPosts.Count > 0 &&
+                            m_postsLists[0].Id.Equals(newPosts[0].Id))
+                        {
+                            // The current post is updated, so update it.
+                            // We can't replace the time because flip view will freak out
+                            // so just update whatever UI we need to update.
+                            m_postsLists[0].Likes = newPosts[0].Likes;
+                            m_postsLists[0].SubTextLine1 = newPosts[0].SubTextLine1;
+                            m_postsLists[0].SubTextLine2PartOne = newPosts[0].SubTextLine2PartOne;
+                            m_postsLists[0].SubTextLine2PartTwo = newPosts[0].SubTextLine2PartTwo;
+                            m_postsLists[0].Domain = newPosts[0].Domain;
+                            m_postsLists[0].Score = newPosts[0].Score;
+                        }
 
-                    int foundTargetPost = -1;
+                        // We have done all we want to do, leave now.
+                        return;
+                    }
+
+                    // If the list is currently empty we want to only load the first element and defer the rest of the
+                    // elements. If the target post is -1 we load the first element, if not we load it only.
+                    deferLoadPosts = m_postsLists.Count == 0;
+                    string deferTargetPost = m_targetPost;
+                    m_targetPost = null;
+                    if (deferLoadPosts)
+                    {
+                        // If we are doing a defer make sure we have a target
+                        if (String.IsNullOrWhiteSpace(deferTargetPost) && newPosts.Count > 0)
+                        {
+                            deferTargetPost = newPosts[0].Id;
+                        }
+                    }
+
+                    // Now setup the post update
+                    int insertIndex = startingPos;
 
                     // Set up the objects for the UI
                     foreach (Post post in newPosts)
@@ -350,42 +412,42 @@ namespace Baconit.Panels
                         }
                         else
                         {
-                            // Add it to the end
-                            m_postsLists.Add(post);
+                            // If we are deferring posts only add the target
+                            if (deferLoadPosts)
+                            {
+                                if (post.Id.Equals(deferTargetPost))
+                                {
+                                    m_postsLists.Add(post);
+                                }
+
+                                // Add it to the deferred list, also add the deferred post so we know
+                                // where it is in the list.
+                                m_deferredPostList.Add(post);
+                            }
+                            else
+                            {
+                                // Otherwise, just add it.
+                                m_postsLists.Add(post);
+                            }
                         }
 
                         // Set the menu button
                         post.FlipViewMenuButton = flipViewMenuVis;
 
-                        // Check if we are looking for a post
-                        if (!String.IsNullOrWhiteSpace(m_targetPost))
-                        {
-                            // Check if this post is it
-                            if (post.Id.Equals(m_targetPost))
-                            {
-                                // Found it! Cache the index for now, we will set it when the list is done loading.
-                                foundTargetPost = insertIndex;
-                                m_targetPost = string.Empty;
-                            }
-                        }
+                        // Add one to the insert index
                         insertIndex++;
                     }
 
-                    // Now that we set the list set the target index
-                    if(foundTargetPost != -1)
+                    // If the item source hasn't been set yet do it now.
+                    if (ui_flipView.ItemsSource == null)
                     {
-                        ui_flipView.SelectedIndex = foundTargetPost;
+                        ui_flipView.ItemsSource = m_postsLists;
+                    }
 
-                        if (foundTargetPost == 0)
-                        {
-                            // If this is the first post the content won't be set unless we call selection changed again.
-                            // This is because the flip view index defaults to 0, but we ignored the request because targetpost was not empty.
-                            // Normally the selected index would change and fire the listener and all would be good, but since we didn't change
-                            // the index it won't. So we will just do it manually.
-                            FlipView_SelectionChanged(null, null);
-                        }
-
-                        // This is a good place to show the comment tip if we have to
+                    // This is a good place to show the comment tip if we have to since this
+                    // indicates this is a first load.
+                    if (deferLoadPosts)
+                    {
                         ShowCommentScrollTipIfNeeded();
                     }
                 }
@@ -394,6 +456,74 @@ namespace Baconit.Panels
 
                 // Hide the loading overlay if it is visible
                 HideFullScreenLoading();
+            });
+        }
+
+        /// <summary>
+        /// If we have deferred post this will add them
+        /// </summary>
+        public async void DoDeferredPostUpdate()
+        {
+            // Check if we have deferred posts
+            bool hasDeferredPosts = false;
+            lock(m_postsLists)
+            {
+                hasDeferredPosts = m_deferredPostList.Count != 0;
+            }
+
+            // If not get out of here
+            if(!hasDeferredPosts)
+            {
+                return;
+            }
+
+            // Otherwise, sleep for a little to let the UI settle down.
+            await Task.Delay(1000);
+
+            // Now kick off a UI thread on low to do the update.
+            await Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(CoreDispatcherPriority.Low, async () =>
+            {
+                lock(m_postsLists)
+                {
+                    int insertIndex = 0;
+                    bool addBefore = true;
+                    string deferredPostId = m_postsLists.Count > 0 ? m_postsLists[0].Id : String.Empty;
+
+                    foreach(Post post in m_deferredPostList)
+                    {
+                        // If this is the post dont do anything but indicate we should add after
+                        if(post.Id.Equals(deferredPostId))
+                        {
+                            addBefore = false;
+                        }
+                        else
+                        {
+                            // If we are adding before add it before
+                            if(addBefore)
+                            {
+                                m_postsLists.Insert(insertIndex, post);
+                                insertIndex++;
+                            }
+                            else
+                            {
+                                // If not add it to the end.
+                                m_postsLists.Add(post);
+                            }
+                        }
+                    }
+
+                    // Now clear out the deferred posts
+                    m_deferredPostList.Clear();
+                }
+
+                // Add update the header sizes again
+                SetHeaderSizes();
+
+                // And preload the content for the next post, but again defer this since it is a background task.
+                await Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
+                {
+                    UpdatePanelContent();
+                });
             });
         }
 
@@ -495,6 +625,13 @@ namespace Baconit.Panels
             App.BaconMan.TelemetryMan.ReportEvent(this, "CopyLinkTapped");
         }
 
+        private void SaveImage_Click(object sender, RoutedEventArgs e)
+        {
+            Post post = (sender as FrameworkElement).DataContext as Post;
+            App.BaconMan.ImageMan.SaveImageLocally(post.Url);
+            App.BaconMan.TelemetryMan.ReportEvent(this, "CopyLinkTapped");
+        }
+
         // I threw up a little while I wrote this.
         Post m_sharePost = null;
         private void SharePost_Click(object sender, RoutedEventArgs e)
@@ -509,7 +646,6 @@ namespace Baconit.Panels
                 dataTransferManager.DataRequested += DataTransferManager_DataRequested;
                 DataTransferManager.ShowShareUI();
                 App.BaconMan.TelemetryMan.ReportEvent(this, "SharePostTapped");
-
             }
         }
 
@@ -566,6 +702,36 @@ namespace Baconit.Panels
             Post post = (sender as FrameworkElement).DataContext as Post;
         }
 
+        /// <summary>
+        /// Fired when the user taps the go to subreddit button
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void GoToSubreddit_Click(object sender, RoutedEventArgs e)
+        {
+            // Navigate to the subreddit.
+            Post post = (sender as FrameworkElement).DataContext as Post;
+            Dictionary<string, object> args = new Dictionary<string, object>();
+            args.Add(PanelManager.NAV_ARGS_SUBREDDIT_NAME, post.Subreddit);
+            m_host.Navigate(typeof(SubredditPanel), post.Subreddit + SortTypes.Hot + SortTimeTypes.Week, args);
+            App.BaconMan.TelemetryMan.ReportEvent(this, "GoToSubredditFlipView");
+        }
+
+        /// <summary>
+        /// Fired when the user taps the go to user button
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void GoToUser_Click(object sender, RoutedEventArgs e)
+        {
+            // Navigate to the user.
+            Post post = (sender as FrameworkElement).DataContext as Post;
+            Dictionary<string, object> args = new Dictionary<string, object>();
+            args.Add(PanelManager.NAV_ARGS_USER_NAME, post.Author);
+            m_host.Navigate(typeof(UserProfile), post.Author, args);
+            App.BaconMan.TelemetryMan.ReportEvent(this, "GoToUserFlipView");
+        }
+
         #endregion
 
         #region Flippping Logic
@@ -575,64 +741,78 @@ namespace Baconit.Panels
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
-        private void FlipView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        private async void FlipView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if(ui_flipView.SelectedIndex == -1)
             {
                 return;
             }
 
-            lock(m_postsLists)
-            {
-                // Check if we are jumping to a target, if so don't do anything.
-                if(!String.IsNullOrWhiteSpace(m_targetPost))
-                {
-                    return;
-                }
-            }
-
             // Mark the item read.
             m_collector.MarkPostRead((Post)ui_flipView.SelectedItem, ui_flipView.SelectedIndex);
-
-            // Update the posts
-            UpdatePanelContent();
 
             // Hide the comment box if shown
             ui_commmentBox.HideBox();
 
             // Reset the scroll pos
             m_lastKnownScrollOffset = 0;
+
+            // If the index is 0 we are most likely doing a first load, so we want to
+            // set the panel content instantly so we get the loading UI as fast a possible.
+            if (ui_flipView.SelectedIndex == 0)
+            {
+                // Update the posts
+                UpdatePanelContent();
+            }
+            else
+            {
+                // Kick off the panel content update to the UI thread with idle pri to give the UI time to setup.
+                await Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
+                {
+                    // Update the posts
+                    UpdatePanelContent();
+                });
+            }
+
+            // Now if we have deferred post add them
+            DoDeferredPostUpdate();
         }
 
         /// <summary>
         /// Updates the content in all of the panels in flipview.
         /// </summary>
-        private void UpdatePanelContent()
+        private async void UpdatePanelContent()
         {
-            // Lock the list
-            lock(m_postsLists)
-            {
-                int minContentLoad = ui_flipView.SelectedIndex - CACHE_BACK_COUNT;
-                int maxContentLoad = ui_flipView.SelectedIndex + CACHE_FORWARD_COUNT;
+            // Create a list we need to set to the UI.
+            List<Tuple<Post, bool>> setToUiList = new List<Tuple<Post, bool>>();
+            List<Post> clearList = new List<Post>();
+            bool extendCollection = false;
 
+            // Get the min and max number of posts to load.
+            int minContentLoad = ui_flipView.SelectedIndex;
+            int maxContentLoad = ui_flipView.SelectedIndex;
+            if (App.BaconMan.UiSettingsMan.FlipView_PreloadFutureContent)
+            {
+                maxContentLoad++;
+            }
+
+            // Lock the list
+            lock (m_postsLists)
+            {
                 for (int i = 0; i < m_postsLists.Count; i++)
                 {
                     Post post = m_postsLists[i];
                     if (i >= minContentLoad && i <= maxContentLoad)
                     {
-                        // We found an item to preload, ask it to.
-                        SetPostContent(ref post, ui_flipView.SelectedIndex == i);
-
-                        // If this is the current item also preload the comments
-                        if(ui_flipView.SelectedIndex == i)
-                        {
-                            PreFetchPostComments(ref post);
-                        }                        
+                        // Add the post to the list of posts to set. We have to do this outside of the lock
+                        // because we might delay while doing it.
+                        setToUiList.Add(new Tuple<Post, bool>(post, ui_flipView.SelectedIndex == i));
                     }
                     else
                     {
-                        ClearPostContent(ref post);
-                        ClearPostComments(ref post);
+                        // Add the post to the list of posts to clear. We have to do this outside of the lock
+                        // because we might delay while doing it.
+                        clearList.Add(post);
                     }
                 }
 
@@ -641,8 +821,45 @@ namespace Baconit.Panels
                 // the count will be wrong.
                 if(m_postsLists.Count > 5 && m_collector.GetCurrentPosts().Count < maxContentLoad + 4)
                 {
-                    m_collector.ExtendCollection(25);
+                    extendCollection = true;
                 }
+            }
+
+            // Extend if we should
+            if(extendCollection)
+            {
+                m_collector.ExtendCollection(25);
+            }
+
+            // Now that we are out of lock set the items we want to set.
+            foreach(Tuple<Post, bool> tuple in setToUiList)
+            {
+                // We found an item to show or prelaod, do it.
+                Post postToSet = tuple.Item1;
+                SetPostContent(ref postToSet, tuple.Item2);
+
+                // If this is the first post to load delay for a while to give the UI time to setup.
+                // This will delay setting the next post as well as prefetching the comments for this
+                // current post.
+                if (m_isFirstPostLoad)
+                {
+                    m_isFirstPostLoad = false;
+                    await Task.Delay(500);
+                }
+
+                // If this is the current item also preload the comments now.
+                if (tuple.Item2)
+                {
+                    PreFetchPostComments(ref postToSet);
+                }
+            }
+
+            // Now clear everything that should be cleared.
+            foreach(Post post in clearList)
+            {
+                Post refPost = post;
+                ClearPostContent(ref refPost);
+                ClearPostComments(ref refPost);
             }
 
             // Update the header sizes
@@ -724,6 +941,9 @@ namespace Baconit.Panels
 
             // Now make a new one without using the subset
             PreFetchPostComments(ref post, true, false);
+
+            // Update the header sizes to fix the UI
+            SetHeaderSizes();
         }
 
         /// <summary>
@@ -739,18 +959,11 @@ namespace Baconit.Panels
             // Get the post
             Post post = ((Post)((FrameworkElement)sender).DataContext);
 
-            if(post == null)
-            {
-                App.BaconMan.TelemetryMan.ReportLog(this, "post is null in List_OnListEndDetectedEvent!", SeverityLevel.Critical);
-                App.BaconMan.TelemetryMan.ReportUnExpectedEvent(this, "postWasNullOnListEndDetectedEvent");
-                return;
-            }
-
             // Show or hide the scroll bar depending if we have gotten to comments yet or not.
             post.VerticalScrollBarVisibility = e.ListScrollTotalDistance > 60 ? ScrollBarVisibility.Auto : ScrollBarVisibility.Hidden;
 
             // Find the header size for this post
-            int currentScrollAera = GetCurrentScrollArea();
+            int currentScrollAera = GetCurrentScrollArea(post);
 
             // Get the height of the current post header
             double currentPostHeaderSize = 0;
@@ -759,14 +972,7 @@ namespace Baconit.Panels
                 foreach (Grid flipHeader in m_flipViewStoryHeaders)
                 {
                     Post headerPost = (Post)(flipHeader.DataContext);
-                    if(headerPost == null)
-                    {
-                        App.BaconMan.TelemetryMan.ReportLog(this, "post is null in List_OnListEndDetectedEvent! for loop", SeverityLevel.Critical);
-                        App.BaconMan.TelemetryMan.ReportUnExpectedEvent(this, "postWasNullOnListEndDetectedEventForLoop");
-                        continue;
-                    }
-
-                    if (headerPost.Id.Equals(post.Id))
+                    if (headerPost != null && headerPost.Id.Equals(post.Id))
                     {
                         currentPostHeaderSize = flipHeader.ActualHeight;
                         break;
@@ -830,12 +1036,12 @@ namespace Baconit.Panels
         /// </summary>
         private void SetHeaderSizes()
         {
+            // Get the screen size, account for the comment box if it is open.
+            int currentScrollAera = GetCurrentScrollArea();
+
             // Lock the post list
             lock (m_postsLists)
             {
-                // Get the screen size, account for the comment box if it is open.
-                int currentScrollAera = GetCurrentScrollArea();
-
                 // Set up the objects for the UI
                 foreach (Post post in m_postsLists)
                 {
@@ -851,13 +1057,42 @@ namespace Baconit.Panels
         /// Returns the current space that's available for the flipview scroller
         /// </summary>
         /// <returns></returns>
-        private int GetCurrentScrollArea()
+        private int GetCurrentScrollArea(Post post = null)
         {
+            // If the post is null get the current post
+            if(post == null && ui_flipView.SelectedIndex != -1)
+            {
+                post = m_postsLists[ui_flipView.SelectedIndex];
+            }
+
+            // Get the control size
             int screenSize = (int)ui_contentRoot.ActualHeight;
+
+            // If the comment box is open remove the height of it.
             if (ui_commmentBox.IsOpen)
             {
                 screenSize -= (int)ui_commmentBox.ActualHeight;
             }
+
+            // If post is null back out here.
+            if(post == null)
+            {
+                return screenSize;
+            }
+
+            // If we are showing the show all comments header add the height of that so it won't be on the screen by default
+            if(post.FlipViewShowEntireThreadMessage == Visibility.Visible)
+            {
+                screenSize += c_hiddenShowAllCommentsHeight;
+            }
+
+            // If we are not hiding the large header also add the height of the comment bar so it will be off screen by default
+            // or if we are full screen from the flip control.
+            if(post.FlipviewHeaderVisibility == Visibility.Visible || m_isFullScreen)
+            {
+                screenSize += c_hiddenCommentHeaderHeight;
+            }
+
             return screenSize;
         }
 
@@ -905,6 +1140,21 @@ namespace Baconit.Panels
 
         #region Comment Click Listeners
 
+        /// <summary>
+        /// Fired when the refresh button is pressed.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void CommentRefresh_Click(object sender, RoutedEventArgs e)
+        {
+            Post post = (sender as FrameworkElement).DataContext as Post;
+            FlipViewPostCommentManager manager = FindCommentManager(post.Id);
+            if (manager != null)
+            {
+                manager.Refresh();
+            }
+        }
+
         private void CommentUp_Tapped(object sender, TappedRoutedEventArgs e)
         {
             // We don't need to animate here, the vote will do it for us
@@ -945,6 +1195,7 @@ namespace Baconit.Panels
                     if(searchPost.Id.Equals(lookingForPostId))
                     {
                         post = searchPost;
+                        break;
                     }
                 }
             }
@@ -960,6 +1211,21 @@ namespace Baconit.Panels
             ui_commmentBox.ShowBox(post, "t1_" +comment.Id);
         }
 
+        private void CommentUser_Tapped(object sender, TappedRoutedEventArgs e)
+        {
+            // Animate the text
+            AnimateText((FrameworkElement)sender);
+
+            // Get the comment
+            Comment comment = (sender as FrameworkElement).DataContext as Comment;
+
+            // Navigate to the user
+            Dictionary<string, object> args = new Dictionary<string, object>();
+            args.Add(PanelManager.NAV_ARGS_USER_NAME, comment.Author);
+            m_host.Navigate(typeof(UserProfile), comment.Author, args);
+            App.BaconMan.TelemetryMan.ReportEvent(this, "GoToUserFromComment");
+        }
+
         private void CommentMore_Tapped(object sender, TappedRoutedEventArgs e)
         {
             // Animate the text
@@ -972,7 +1238,7 @@ namespace Baconit.Panels
                 FlyoutBase.ShowAttachedFlyout(element);
             }
 
-            App.BaconMan.TelemetryMan.ReportEvent(this, "CommentMoreTapped");    
+            App.BaconMan.TelemetryMan.ReportEvent(this, "CommentMoreTapped");
         }
 
         private void CommentSave_Click(object sender, RoutedEventArgs e)
@@ -1104,6 +1370,16 @@ namespace Baconit.Panels
             return null;
         }
 
+        /// <summary>
+        /// Fired when a user taps a link in a comment
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void MarkdownTextBlock_OnMarkdownLinkTapped(object sender, UniversalMarkdown.OnMarkdownLinkTappedArgs e)
+        {
+            App.BaconMan.ShowGlobalContent(e.Link);
+        }
+
         #endregion
 
         #region Pro Tip Logic
@@ -1224,6 +1500,130 @@ namespace Baconit.Panels
 
         #endregion
 
+        #region Full Screen Logic
+
+        /// <summary>
+        /// Fired when the control wants to go full screen.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void FlipViewContentControl_OnToggleFullscreen(object sender, FlipViewContentControl.OnToggleFullScreenEventArgs e)
+        {
+            // Get the post
+            Post post = ((Post)((FrameworkElement)sender).DataContext);
+
+            // Set if we are full screen or not.
+            m_isFullScreen = e.GoFullScreen;
+
+            // Hide or show the header
+            if (e.GoFullScreen == (post.FlipviewHeaderVisibility == Visibility.Visible))
+            {
+                ToggleHeader(post);
+            }
+
+            // #todo scroll comments to the top so they aren't visible?
+        }
+
+        /// <summary>
+        /// Fired when the post header toggle is clicked
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void PostHeaderToggle_Click(object sender, RoutedEventArgs e)
+        {
+            Post post = (Post)((FrameworkElement)sender).DataContext;
+            ToggleHeader(post);
+        }
+
+        /// <summary>
+        /// Given a post toggles the header
+        /// </summary>
+        /// <param name="post"></param>
+        private void ToggleHeader(Post post)
+        {
+            // #todo animate this
+            post.FlipviewHeaderVisibility = post.FlipviewHeaderVisibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+            post.HeaderCollpaseToggleAngle = post.FlipviewHeaderVisibility == Visibility.Visible ? 180 : 0;
+
+            // Update the header size
+            SetHeaderSizes();
+        }
+
+        #endregion
+
+        #region Comment Sort
+
+        /// <summary>
+        /// Fired when either comment sort is tapped
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void OpenMenuFlyout_Tapped(object sender, TappedRoutedEventArgs e)
+        {
+            FrameworkElement element = sender as FrameworkElement;
+            if (element != null)
+            {
+                FlyoutBase.ShowAttachedFlyout(element);
+            }
+            App.BaconMan.TelemetryMan.ReportEvent(this, "CommentSortTapped");
+        }
+
+        /// <summary>
+        /// Fired when a user taps a new sort type for comments.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void CommentSortMenu_Click(object sender, RoutedEventArgs e)
+        {
+            // Get the post
+            Post post = (Post)((FrameworkElement)sender).DataContext;
+
+            // Update sort type
+            MenuFlyoutItem item = sender as MenuFlyoutItem;
+            post.CommentSortType = GetCommentSortFromString(item.Text);
+
+            // Get the collector and update the sort
+            FlipViewPostCommentManager commentManager = FindCommentManager(post.Id);
+            commentManager.ChangeCommentSort();
+        }
+
+        private CommentSortTypes GetCommentSortFromString(string typeString)
+        {
+            typeString = typeString.ToLower();
+            switch(typeString)
+            {
+                case "best":
+                default:
+                    return CommentSortTypes.Best;
+                case "controversial":
+                    return CommentSortTypes.Controversial;
+                case "new":
+                    return CommentSortTypes.New;
+                case "old":
+                    return CommentSortTypes.Old;
+                case "q&a":
+                    return CommentSortTypes.QA;
+                case "top":
+                    return CommentSortTypes.Top;
+            }
+        }
+
+        private void CommentShowingCountMenu_Click(object sender, RoutedEventArgs e)
+        {
+            // Get the post
+            Post post = (Post)((FrameworkElement)sender).DataContext;
+
+            // Parse the new comment count
+            MenuFlyoutItem item = sender as MenuFlyoutItem;
+            post.CurrentCommentShowingCount = int.Parse(item.Text);
+
+            // Get the collector and update the sort
+            FlipViewPostCommentManager commentManager = FindCommentManager(post.Id);
+            commentManager.UpdateShowingCommentCount(post.CurrentCommentShowingCount);
+        }
+
+        #endregion
+
         /// <summary>
         /// Sets the post content. For now all we give the flip view control is the URL
         /// and it must figure out the rest on it's own.
@@ -1253,6 +1653,11 @@ namespace Baconit.Panels
         private void ui_contentRoot_SizeChanged(object sender, SizeChangedEventArgs e)
         {
             SetHeaderSizes();
+        }
+
+        private void Grid_Tapped(object sender, TappedRoutedEventArgs e)
+        {
+
         }
     }
 }

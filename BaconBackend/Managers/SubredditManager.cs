@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using BaconBackend.Helpers;
+using System.Net;
 
 namespace BaconBackend.Managers
 {
@@ -172,7 +173,7 @@ namespace BaconBackend.Managers
         }
 
         /// <summary>
-        /// Tries to get a subreddit from the web by the diaplay name.
+        /// Tries to get a subreddit from the web by the display name.
         /// </summary>
         /// <returns>Returns null if the subreddit get fails.</returns>
         public async Task<Subreddit> GetSubredditFromWebByDisplayName(string displayName)
@@ -181,7 +182,7 @@ namespace BaconBackend.Managers
             try
             {
                 // Make the call
-                string jsonResponse = await m_baconMan.NetworkMan.MakeRedditGetRequest($"/r/{displayName}/about/.json");
+                string jsonResponse = await m_baconMan.NetworkMan.MakeRedditGetRequestAsString($"/r/{displayName}/about/.json");
 
                 // Try to parse out the subreddit
                 string subredditData = MiscellaneousHelper.ParseOutRedditDataElement(jsonResponse);
@@ -206,7 +207,10 @@ namespace BaconBackend.Managers
                 {
                     m_tempSubredditCache.Add(foundSubreddit);
                 }
-            }
+
+                // Format the subreddit
+                foundSubreddit.Description = WebUtility.HtmlDecode(foundSubreddit.Description);
+            }        
 
             return foundSubreddit;
         }
@@ -248,7 +252,7 @@ namespace BaconBackend.Managers
                 postData.Add(new KeyValuePair<string, string>("sr", "t5_"+subredditId));
 
                 // Make the call
-                string jsonResponse = await m_baconMan.NetworkMan.MakeRedditPostRequest($"/api/subscribe", postData);
+                string jsonResponse = await m_baconMan.NetworkMan.MakeRedditPostRequestAsString($"/api/subscribe", postData);
 
                 // Validate the response
                 if (jsonResponse.Contains("{}"))
@@ -402,6 +406,9 @@ namespace BaconBackend.Managers
             {
                 // Mark if it is a favorite
                 subreddit.IsFavorite = FavoriteSubreddits.ContainsKey(subreddit.Id);
+
+                // Escape the description, we need to do it twice because sometimes it is double escaped.
+                subreddit.Description = WebUtility.HtmlDecode(subreddit.Description);
 
                 // Do a simple inert sort, account for favorites
                 bool wasAdded = false;

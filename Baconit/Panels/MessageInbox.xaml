@@ -5,6 +5,7 @@
              xmlns:helperControls="using:Baconit.HelperControls"
              xmlns:local="using:Baconit.Panels"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:universalMarkdown="using:UniversalMarkdown"
              RequestedTheme="Dark"
              d:DesignHeight="700"
              d:DesignWidth="400"
@@ -37,7 +38,9 @@
                                Text="{Binding HeaderSecond}" />
                 </Grid>
 
-                <helperControls:MarkdownTextBox Grid.Row="1" Markdown="{Binding Body}" />
+                <universalMarkdown:MarkdownTextBlock Grid.Row="1"
+                                                     Markdown="{Binding Body}"
+                                                     OnMarkdownLinkTapped="MarkdownTextBlock_OnMarkdownLinkTapped" />
 
                 <!--  Message buttons  -->
                 <!--  Note we use - margins and postive padding to make the hit box larger  -->
@@ -60,7 +63,7 @@
         </DataTemplate>
     </UserControl.Resources>
 
-    <Grid Background="#191919">
+    <Grid x:Name="ui_contentRoot" Background="#333333">
         <Grid.RowDefinitions>
             <RowDefinition Height="auto" />
             <RowDefinition Height="*" />
@@ -68,19 +71,37 @@
         </Grid.RowDefinitions>
 
         <!--  Message Header  -->
-        <StackPanel Grid.Row="0"
+        <Grid Grid.Row="0" Padding="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Bottom"
+                       FontWeight="Bold"
+                       Text="MESSAGE INBOX" />
+            <Button Grid.Column="1"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
                     Background="#333333"
-                    Orientation="Horizontal"
-                    Padding="12">
-            <TextBlock VerticalAlignment="Bottom" Text="Message Inbox" />
-        </StackPanel>
+                    BorderBrush="Transparent"
+                    BorderThickness="0"
+                    Click="Refresh_Click">
+                <Button.Content>
+                    <Viewbox Width="15">
+                        <SymbolIcon Symbol="Refresh" />
+                    </Viewbox>
+                </Button.Content>
+            </Button>
+        </Grid>
 
         <!--  The main message list  -->
         <ListView x:Name="ui_messageList"
                   Grid.Row="1"
+                  Background="#191919"
                   ItemContainerStyle="{StaticResource ListViewItemNoHighlight}"
                   ItemTemplate="{StaticResource MessageListItem}"
-                  SelectionChanged="MessageList_SelectionChanged">
+                  SelectionChanged="MessageList_SelectionChanged"
+                  Style="{StaticResource ListViewStyle}">
 
             <!--  This animates the messages in  -->
             <ListView.ItemContainerTransitions>
@@ -92,12 +113,18 @@
         </ListView>
 
         <!--  The main progress bar  -->
-        <ProgressRing x:Name="ui_progressBar"
+        <ProgressRing x:Name="ui_progressRing"
                       Grid.Row="1"
                       Width="40"
                       Height="40"
                       HorizontalAlignment="Center"
                       VerticalAlignment="Center" />
+
+        <!--  The progress bar used when we have a list loaded  -->
+        <ProgressBar x:Name="ui_progressBar"
+                     Grid.Row="1"
+                     VerticalAlignment="Top"
+                     Background="Transparent" />
 
         <helperControls:CommentBox x:Name="ui_replyBox"
                                    Grid.Row="2"

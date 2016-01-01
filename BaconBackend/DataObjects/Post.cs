@@ -1,4 +1,5 @@
-﻿using Newtonsoft.Json;
+﻿using BaconBackend.Collectors;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -14,33 +15,48 @@ using Windows.UI.Xaml.Media.Imaging;
 
 namespace BaconBackend.DataObjects
 {
-    public enum PostType
-    {
-        StaticImage,
-        Webpage,
-    }
-
+    /// <summary>
+    /// A reddit post, either of a link or of text.
+    /// A post has a score, which is the total number of upvotes - total number of downvotes.
+    /// </summary>
     [JsonObject(MemberSerialization.OptOut)]
     public class Post : INotifyPropertyChanged
     {
+        /// <summary>
+        /// The comment's unique ID. Prefixed with "t3_", this 
+        /// is the post's fullname.
+        /// </summary>
         [JsonProperty(PropertyName = "id")]
         public string Id { get; set; }
 
+        /// <summary>
+        /// If the post is self-text, the post's subreddit, preceded by "self.".
+        /// If the post is a link, the website domain the post is a link to.
+        /// </summary>
         [JsonProperty(PropertyName = "domain")]
         public string Domain { get; set; }
 
+        /// <summary>
+        /// The subreddit this post occurs in.
+        /// </summary>
         [JsonProperty(PropertyName = "subreddit")]
         public string Subreddit { get; set; }
 
+        /// <summary>
+        /// The post's self-text. If the post is a link, this is the empty string.
+        /// </summary>
         [JsonProperty(PropertyName = "selftext")]
         public string Selftext { get; set; }
 
-        [JsonProperty(PropertyName = "clicked")]
-        public bool Clicked { get; set; }
-
+        /// <summary>
+        /// The user who submitted this post.
+        /// </summary>
         [JsonProperty(PropertyName = "author")]
         public string Author { get; set; }
 
+        /// <summary>
+        /// The comment's score: total upvotes - total downvotes.
+        /// </summary>
         [JsonProperty(PropertyName = "score")]
         public int Score
         {
@@ -57,36 +73,74 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         int m_score = 0;
 
+        /// <summary>
+        /// If this post is marked a only for ages 18 years or older.
+        /// </summary>
         [JsonProperty(PropertyName = "over_18")]
         public bool IsOver18 { get; set; }
-
+        
+        /// <summary>
+        /// If this post is stickied to the top of the subreddit's posts, when sorted by hotness.
+        /// </summary>
         [JsonProperty(PropertyName = "stickied")]
         public bool IsStickied { get; set; }
 
+        /// <summary>
+        /// If this post is self-text, (instead of a link).
+        /// </summary>
         [JsonProperty(PropertyName = "is_self")]
         public bool IsSelf { get; set; }
 
+        /// <summary>
+        /// The post's link, or the post's permalink if it is self-text.
+        /// </summary>
         [JsonProperty(PropertyName = "url")]
         public string Url { get; set; }
 
+        /// <summary>
+        /// The post's title.
+        /// </summary>
         [JsonProperty(PropertyName = "title")]
         public string Title { get; set; }
 
+        /// <summary>
+        /// Unix timestamp of the time this post was submitted.
+        /// Or, the number of seconds that have passed since
+        /// January 1, 1970 UTC until this post was submitted.
+        /// </summary>
         [JsonProperty(PropertyName = "created_utc")]
         public double CreatedUtc { get; set; }
 
+        /// <summary>
+        /// The number of comments on this post, counting all replies to other comments.
+        /// </summary>
         [JsonProperty(PropertyName = "num_comments")]
         public int NumComments { get; set; }
 
+        /// <summary>
+        /// A link to the preview image used when listing posts, "self" if the post is self-text,
+        /// or the empty string if there is no preview image.
+        /// </summary>
         [JsonProperty(PropertyName = "thumbnail")]
         public string Thumbnail { get; set; }
 
+        /// <summary>
+        /// A link to the post.
+        /// </summary>
         [JsonProperty(PropertyName = "permalink")]
         public string Permalink { get; set; }
 
+        /// <summary>
+        /// The post's flair text.
+        /// </summary>
         [JsonProperty(PropertyName = "link_flair_text")]
         public string LinkFlairText { get; set; }
 
+        /// <summary>
+        /// true: the logged-in user upvoted the post.
+        /// false: the logged-in user downvoted the post.
+        /// null: the logged-in user has neither upvoted nor downvoted the post.
+        /// </summary>
         [JsonProperty(PropertyName = "likes")]
         public bool? Likes
         {
@@ -104,6 +158,9 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         bool? m_likes = null;
 
+        /// <summary>
+        /// Whether the logged in user has saved the post.
+        /// </summary>
         [JsonProperty(PropertyName = "saved")]
         public bool IsSaved
         {
@@ -120,6 +177,9 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         bool m_isSaved;
 
+        /// <summary>
+        /// Whether the user hid the post from being listed normally.
+        /// </summary>
         [JsonProperty(PropertyName = "hidden")]
         public bool IsHidden
         {
@@ -135,6 +195,25 @@ namespace BaconBackend.DataObjects
         }
         [JsonIgnore]
         bool m_isHidden;
+
+        /// <summary>
+        /// Represents the current comment sort type for this post
+        /// </summary>
+        [JsonIgnore]
+        public CommentSortTypes CommentSortType
+        {
+            get
+            {
+                return m_commentSortType;
+            }
+            set
+            {
+                m_commentSortType = value;
+                NotifyPropertyChanged(nameof(CommentCurrentSortTypeString));
+            }
+        }
+        [JsonIgnore]
+        CommentSortTypes m_commentSortType = CommentSortTypes.Best;
 
         //
         // UI Vars
@@ -347,6 +426,33 @@ namespace BaconBackend.DataObjects
         int m_titleMaxLines = 2;
 
         /// <summary>
+        /// Sets text for comment sort
+        /// </summary>
+        [JsonIgnore]
+        public string CommentCurrentSortTypeString
+        {
+            get
+            {
+                switch(CommentSortType)
+                {
+                    default:
+                    case CommentSortTypes.Best:
+                        return "Best";
+                    case CommentSortTypes.Controversial:
+                        return "Controversial";
+                    case CommentSortTypes.New:
+                        return "New";
+                    case CommentSortTypes.Old:
+                        return "Old";
+                    case CommentSortTypes.QA:
+                        return "Q&A";
+                    case CommentSortTypes.Top:
+                        return "Top";
+                }
+            }
+        }
+
+        /// <summary>
         /// Sets text for a context menu item
         /// </summary>
         [JsonIgnore]
@@ -354,7 +460,7 @@ namespace BaconBackend.DataObjects
         {
             get
             {
-                return IsSaved ? "Unsave Post" : "Save Post";
+                return IsSaved ? "Unsave post" : "Save post";
             }
         }
 
@@ -366,7 +472,7 @@ namespace BaconBackend.DataObjects
         {
             get
             {
-                return IsHidden ? "Unhide Post" : "Hide Post";
+                return IsHidden ? "Unhide post" : "Hide post";
             }
         }
 
@@ -382,6 +488,10 @@ namespace BaconBackend.DataObjects
             }
         }
 
+        /// <summary>
+        /// The color this post's upvote button should be in the UI.
+        /// It is accented if and only if the user has upvoted this comment.
+        /// </summary>
         [JsonIgnore]
         public SolidColorBrush UpVoteColor
         {
@@ -398,6 +508,10 @@ namespace BaconBackend.DataObjects
             }
         }
 
+        /// <summary>
+        /// The color this post's downvote button should be in the UI.
+        /// It is accented if and only if the user has upvoted this comment.
+        /// </summary>
         [JsonIgnore]
         public SolidColorBrush DownVoteColor
         {
@@ -414,6 +528,9 @@ namespace BaconBackend.DataObjects
             }
         }
 
+        /// <summary>
+        /// The color the UI should use to indicate there are unread comments on this post.
+        /// </summary>
         [JsonIgnore]
         public SolidColorBrush NewCommentColor
         {
@@ -430,6 +547,9 @@ namespace BaconBackend.DataObjects
             }
         }
 
+        /// <summary>
+        /// A darker accented color.
+        /// </summary>
         [JsonIgnore]
         public SolidColorBrush DarkenedAccentColorBrush
         {
@@ -439,6 +559,10 @@ namespace BaconBackend.DataObjects
             }
         }
 
+        /// <summary>
+        /// The spacing to leave before the new-comments indicator.
+        /// This is empty if there are no new comments.
+        /// </summary>
         [JsonIgnore]
         public Thickness NewCommentMargin
         {
@@ -481,6 +605,9 @@ namespace BaconBackend.DataObjects
 
         #region FlipView Vars
 
+        /// <summary>
+        /// The number of pixels the UI needs to display the post's header.
+        /// </summary>
         [JsonIgnore]
         public int HeaderSize
         {
@@ -497,6 +624,9 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         int m_headerSize = 500;
 
+        /// <summary>
+        /// The list of comments on this post.
+        /// </summary>
         [JsonIgnore]
         public ObservableCollection<Comment> Comments
         {
@@ -513,6 +643,9 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         ObservableCollection<Comment> m_comments = new ObservableCollection<Comment>();
 
+        /// <summary>
+        /// The visibility of the scroll bar depending on if the any comments are loaded.
+        /// </summary>
         [JsonIgnore]
         public ScrollBarVisibility VerticalScrollBarVisibility
         {
@@ -529,6 +662,10 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         ScrollBarVisibility m_verticalScrollBarVisibility = ScrollBarVisibility.Hidden;
 
+
+        /// <summary>
+        /// The visibility of "Loading Comments", depending on if the comments have loaded yet.
+        /// </summary>
         [JsonIgnore]
         public Visibility ShowCommentLoadingMessage
         {
@@ -564,6 +701,9 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         string m_showCommentsErrorMessage = "";
 
+        /// <summary>
+        /// The visibility of the menu button when the post is displayed in flip view.
+        /// </summary>
         [JsonIgnore]
         public Visibility FlipViewMenuButton
         {
@@ -580,7 +720,9 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         Visibility m_flipViewMenuButton = Visibility.Collapsed;
 
-
+        /// <summary>
+        /// The visibility of the post's header as sticky to the top of the flip view.
+        /// </summary>
         [JsonIgnore]
         public Visibility FlipViewStickyHeaderVis
         {
@@ -597,6 +739,10 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         Visibility m_flipViewStickyHeaderVis = Visibility.Collapsed;
 
+        /// <summary>
+        /// The visibility of the button to show all comments on a post.
+        /// This should be visible when only some comments are visible.
+        /// </summary>
         [JsonIgnore]
         public Visibility FlipViewShowEntireThreadMessage
         {
@@ -612,6 +758,12 @@ namespace BaconBackend.DataObjects
         }
         [JsonIgnore]
         Visibility m_flipViewShowEntireThreadMessage = Visibility.Collapsed;
+
+        /// <summary>
+        ///  Used to indicate if the save image option should be visible
+        /// </summary>
+        [JsonIgnore]
+        public Visibility ShowSaveImageMenu { get; set; }
 
         /// <summary>
         /// Used by flip view to show the comment or post reply box
@@ -638,10 +790,108 @@ namespace BaconBackend.DataObjects
         [JsonIgnore]
         public double FlipViewHeaderHeight = 0;
 
+        /// <summary>
+        /// Flip view post header visibility
+        /// </summary>
+        [JsonIgnore]
+        public Visibility FlipviewHeaderVisibility
+        {
+            get
+            {
+                return m_flipviewHeaderVisibility;
+            }
+            set
+            {
+                m_flipviewHeaderVisibility = value;
+                NotifyPropertyChanged(nameof(FlipviewHeaderVisibility));
+            }
+        }
+        [JsonIgnore]
+        Visibility m_flipviewHeaderVisibility = Visibility.Visible;
+
+        /// <summary>
+        /// The current angle of the header toggle button
+        /// </summary>
+        [JsonIgnore]
+        public int HeaderCollpaseToggleAngle
+        {
+            get
+            {
+                return m_headerCollpaseToggleAngle;
+            }
+            set
+            {
+                m_headerCollpaseToggleAngle = value;
+                NotifyPropertyChanged(nameof(HeaderCollpaseToggleAngle));
+            }
+        }
+        [JsonIgnore]
+        int m_headerCollpaseToggleAngle = 180;
+
+
+        /// <summary>
+        /// Indicates how many comments we are showing
+        /// </summary>
+        [JsonIgnore]
+        public int CurrentCommentShowingCount
+        {
+            get
+            {
+                return m_currentCommentCount;
+            }
+            set
+            {
+                m_currentCommentCount = value;
+                NotifyPropertyChanged(nameof(CurrentCommentShowingCount));
+            }
+        }
+        [JsonIgnore]
+        int m_currentCommentCount = 150;
+
+        /// <summary>
+        /// Shows or hides the loading more progress bar for comments.
+        /// </summary>
+        [JsonIgnore]
+        public bool FlipViewShowLoadingMoreComments
+        {
+            get
+            {
+                return m_flipViewShowLoadingMoreComments;
+            }
+            set
+            {
+                m_flipViewShowLoadingMoreComments = value;
+                NotifyPropertyChanged(nameof(FlipViewShowLoadingMoreComments));
+                NotifyPropertyChanged(nameof(FlipViewShowLoadingMoreCommentsVis));
+            }
+        }
+        [JsonIgnore]
+        bool m_flipViewShowLoadingMoreComments = false;
+
+        /// <summary>
+        /// Shows or hides the loading more progress bar for comments.
+        /// </summary>
+        [JsonIgnore]
+        public Visibility FlipViewShowLoadingMoreCommentsVis
+        {
+            get
+            {
+                return m_flipViewShowLoadingMoreComments ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
+
         #endregion
 
-        // UI property changed handler
+        /// <summary>
+        /// UI property changed handler that's called when a property of this comment is changed.
+        /// </summary>
         public event PropertyChangedEventHandler PropertyChanged;
+
+        /// <summary>
+        /// Called to indicate a property of this object has changed.
+        /// </summary>
+        /// <param name="propertyName">Name of the changed property.</param>
         private void NotifyPropertyChanged(String propertyName)
         {
             PropertyChangedEventHandler handler = PropertyChanged;
