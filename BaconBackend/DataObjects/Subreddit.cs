@@ -45,6 +45,18 @@ namespace BaconBackend.DataObjects
         public bool IsFavorite { get; set; }
 
         /// <summary>
+        /// The public markdown description for the subreddit.
+        /// </summary>
+        [JsonProperty(PropertyName = "description")]
+        public string Description { get; set; }
+
+        /// <summary>
+        /// The number of subs this subreddit has
+        /// </summary>
+        [JsonProperty(PropertyName = "subscribers")]
+        public int? SubscriberCount { get; set; } = null;
+        
+        /// <summary>
         /// The type of subreddit this is
         /// </summary>
         [JsonProperty(PropertyName = "subreddit_type")]
@@ -54,7 +66,7 @@ namespace BaconBackend.DataObjects
         /// Indicates this is not a real subreddit, we made it up.
         /// </summary>
         [JsonProperty(PropertyName = "isArtifical")]
-        public bool IsArtifical { get; set; } = false;
+        public bool IsArtifical { get; set; } = false;        
 
         /// <summary>
         /// Uri to the favorite icon
@@ -86,9 +98,9 @@ namespace BaconBackend.DataObjects
             }
         }
 
-        public string GetNavigationUniqueId(SortTypes type)
+        public string GetNavigationUniqueId(SortTypes type, SortTimeTypes sortType)
         {
-            return DisplayName + type;
+            return DisplayName + type + sortType;
         }
     }
 }

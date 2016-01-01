@@ -16,13 +16,16 @@ using Windows.UI.Xaml.Navigation;
 using BaconBackend.DataObjects;
 using Baconit.HelperControls;
 using BaconBackend.Helpers;
+using UniversalMarkdown;
+using Windows.UI.Core;
+using System.Threading.Tasks;
 
 namespace Baconit.FlipViewControls
 {
     public sealed partial class RedditMarkdownFlipControl : UserControl, IFlipViewContentControl
     {
         IFlipViewContentHost m_host;
-        MarkdownTextBox m_markdownBox;
+        MarkdownTextBlock m_markdownBlock;
 
         public RedditMarkdownFlipControl(IFlipViewContentHost host)
         {
@@ -46,12 +49,27 @@ namespace Baconit.FlipViewControls
         /// Called when we should show the content
         /// </summary>
         /// <param name="post"></param>
-        public void OnPrepareContent(Post post)
+        public async void OnPrepareContent(Post post)
         {
-            m_markdownBox = new MarkdownTextBox();
-            m_markdownBox.OnMarkdownReady += MarkdownBox_OnMarkdownReady;
-            m_markdownBox.Markdown = post.Selftext;
-            ui_contentRoot.Children.Add(m_markdownBox);            
+            // Since some of this can be costly, delay the work load until we aren't animating.
+            await Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
+            {
+                m_markdownBlock = new MarkdownTextBlock();
+                m_markdownBlock.OnMarkdownLinkTapped += MarkdownBlock_OnMarkdownLinkTapped;
+                m_markdownBlock.OnMarkdownReady += MarkdownBox_OnMarkdownReady;
+                m_markdownBlock.Markdown = post.Selftext;                
+                ui_contentRoot.Children.Add(m_markdownBlock);
+            });     
+        }
+
+        /// <summary>
+        /// Fired when a link is tapped in the markdown.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void MarkdownBlock_OnMarkdownLinkTapped(object sender, OnMarkdownLinkTappedArgs e)
+        {
+            App.BaconMan.ShowGlobalContent(e.Link);
         }
 
         /// <summary>
@@ -59,10 +77,18 @@ namespace Baconit.FlipViewControls
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
-        private void MarkdownBox_OnMarkdownReady(object sender, EventArgs e)
+        private void MarkdownBox_OnMarkdownReady(object sender, OnMarkdownReadyArgs e)
         {
-            // Hide loading
-            m_host.HideLoading();
+            if(e.WasError)
+            {
+                m_host.ShowError();
+                App.BaconMan.TelemetryMan.ReportUnExpectedEvent(this, "FailedToShowMarkdown", e.Exception);
+            }
+            else
+            {
+                // Hide loading
+                m_host.HideLoading();
+            }
         }
 
         /// <summary>
@@ -79,11 +105,12 @@ namespace Baconit.FlipViewControls
         public void OnDestroyContent()
         {
             // Clear the markdown
-            if(m_markdownBox != null)
+            if(m_markdownBlock != null)
             {
-                m_markdownBox.OnMarkdownReady -= MarkdownBox_OnMarkdownReady;
+                m_markdownBlock.OnMarkdownReady -= MarkdownBox_OnMarkdownReady;
+                m_markdownBlock.OnMarkdownLinkTapped -= MarkdownBlock_OnMarkdownLinkTapped;
             }
-            m_markdownBox = null;
+            m_markdownBlock = null;
 
             // Clear the UI
             ui_contentRoot.Children.Clear();

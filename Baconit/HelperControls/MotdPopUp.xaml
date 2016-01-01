@@ -4,12 +4,12 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:local="using:Baconit.HelperControls"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:universalMarkdown="using:UniversalMarkdown"
              d:DesignHeight="300"
              d:DesignWidth="400"
              mc:Ignorable="d">
 
     <Grid x:Name="ui_contentRoot" Background="#BB000000">
-
         <!--  Animations  -->
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup x:Name="DialogVis">
@@ -102,24 +102,31 @@
         <Grid MaxWidth="500"
               HorizontalAlignment="Center"
               VerticalAlignment="Center"
-              RenderTransformOrigin=".5,.5">
+              RenderTransformOrigin=".5,.5" Margin="12">
             <Grid.RowDefinitions>
-                <RowDefinition Height="auto" />
+                <RowDefinition Height="*" />
                 <RowDefinition Height="auto" />
             </Grid.RowDefinitions>
             <Grid.RenderTransform>
                 <ScaleTransform x:Name="ui_contentScale" />
             </Grid.RenderTransform>
-            <Grid Background="#333333">
-                <StackPanel>
+            <ScrollViewer Background="#333333" Style="{StaticResource ScrollViewerStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="auto" />
+                        <RowDefinition Height="auto" />
+                    </Grid.RowDefinitions>
                     <TextBlock x:Name="ui_titleText"
                                Margin="12,12,12,12"
                                Foreground="{ThemeResource SystemControlBackgroundAccentBrush}"
                                Style="{ThemeResource TitleTextBlockStyle}"
                                Text="Title! Welcome Developer!" />
-                    <local:MarkdownTextBox x:Name="ui_markdownText" Margin="12,12,12,24" />
-                </StackPanel>
-            </Grid>
+                    <universalMarkdown:MarkdownTextBlock x:Name="ui_markdownText"
+                                                         Grid.Row="1"
+                                                         Margin="12,12,12,24"
+                                                         OnMarkdownLinkTapped="MarkdownText_OnMarkdownLinkTapped" />
+                </Grid>
+            </ScrollViewer>
             <local:CircleIconButton Grid.Row="1"
                                     Margin="12"
                                     OnIconTapped="Close_OnIconTapped"

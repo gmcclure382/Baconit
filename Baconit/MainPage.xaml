@@ -63,7 +63,8 @@
 
         <SplitView x:Name="ui_splitView"
                    PaneBackground="#1F1F1F"
-                   PaneClosed="SplitView_PaneClosed">
+                   PaneClosed="SplitView_PaneClosed"
+                   SizeChanged="SplitView_SizeChanged">
             <SplitView.Pane>
                 <Grid>
                     <Grid.RowDefinitions>
@@ -112,7 +113,8 @@
                               VerticalAlignment="Top"
                               Background="#00000000"
                               ItemContainerStyle="{StaticResource ListViewItemNoHighlight}"
-                              SelectionChanged="SubredditList_SelectionChanged">
+                              SelectionChanged="SubredditList_SelectionChanged"
+                              Style="{StaticResource ListViewStyle}">
                         <ListView.ItemTemplate>
                             <DataTemplate>
                                 <Grid Margin="0" HorizontalAlignment="Stretch">
@@ -190,7 +192,8 @@
                     <!--  Search Header  -->
                     <Grid x:Name="ui_searchHeader"
                           Grid.Row="7"
-                          Grid.ColumnSpan="2">
+                          Grid.ColumnSpan="2"
+                          Background="{StaticResource BaconitAccentColorLevel3Brush}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition x:Name="ui_quickSearchTextBoxColumDef" Width="auto" />
                             <ColumnDefinition x:Name="ui_quickSearchHeaderColumDef" Width="*" />
@@ -237,6 +240,7 @@
                     <Grid x:Name="ui_trendingSubredditsHeader"
                           Grid.Row="8"
                           Grid.ColumnSpan="2"
+                          Background="{StaticResource BaconitAccentColorLevel2Brush}"
                           Tapped="TrendingSubredditsHeader_Tapped">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="auto" />
@@ -323,7 +327,7 @@
                     <Grid x:Name="ui_accountHeaderGrid"
                           Grid.Row="10"
                           Grid.ColumnSpan="2"
-                          Background="{ThemeResource SystemControlBackgroundAccentBrush}"
+                          Background="{StaticResource BaconitAccentColorLevel1Brush}"
                           Tapped="AccountHeader_Tapped">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="auto" />
@@ -369,9 +373,10 @@
                         </StackPanel>
                         <StackPanel x:Name="ui_accountHeaderMailBox"
                                     Grid.Column="2"
-                                    Margin="12,0"
                                     VerticalAlignment="Center"
+                                    Background="Transparent"
                                     Orientation="Horizontal"
+                                    Padding="11"
                                     Tapped="InboxGrid_Tapped"
                                     Visibility="Collapsed">
                             <TextBlock x:Name="ui_inboxCountTextBlock" VerticalAlignment="Center" />
